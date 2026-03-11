@@ -444,6 +444,7 @@ func defaultPathStyle() bool {
 
 var oracleCompileRegexp = `.*\.compat.objectstorage\.(.*)\.oraclecloud\.com`
 var OVHCompileRegexp = `^s3\.(\w*)(\.\w*)?\.cloud\.ovh\.net$`
+var mrapCompileRegexp = regexp.MustCompile(`^(.+)\.mrap\.accesspoint\.s3-global\.amazonaws\.com$`)
 
 func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) {
 	if !strings.Contains(endpoint, "://") {
@@ -463,6 +464,7 @@ func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) 
 		bucketName string
 		region     string
 		ep         string
+		isMRAP     bool
 	)
 
 	if uri.Path != "" {
@@ -470,11 +472,17 @@ func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) 
 		pathParts := strings.Split(uri.Path, "/")
 		bucketName = pathParts[1]
 		if strings.Contains(uri.Host, ".amazonaws.com") {
-			// standard s3
-			// s3-[REGION].[REST_OF_ENDPOINT]/[BUCKET]
-			// s3.[REGION].amazonaws.com[.cn]/[BUCKET]
-			endpoint = uri.Host
-			region = parseRegion(endpoint)
+			if mrapCompileRegexp.MatchString(uri.Host) {
+				// MRAP (Multi-Region Access Point): use the full endpoint as the custom endpoint
+				ep = uri.Host
+				isMRAP = true
+			} else {
+				// standard s3
+				// s3-[REGION].[REST_OF_ENDPOINT]/[BUCKET]
+				// s3.[REGION].amazonaws.com[.cn]/[BUCKET]
+				endpoint = uri.Host
+				region = parseRegion(endpoint)
+			}
 		} else {
 			// compatible s3
 			ep = uri.Host
@@ -499,6 +507,12 @@ func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) 
 					if submatch := vpcCompile.FindStringSubmatch(uri.Host); len(submatch) == 2 {
 						region = submatch[1]
 					}
+				} else if mrapCompileRegexp.MatchString(uri.Host) {
+					// MRAP (Multi-Region Access Point): use the access point alias as the bucket
+					mrapMatch := mrapCompileRegexp.FindStringSubmatch(uri.Host)
+					bucketName = mrapMatch[1]
+					ep = uri.Host
+					isMRAP = true
 				} else {
 					// standard s3
 					// [BUCKET].s3-[REGION].[REST_OF_ENDPOINT]
@@ -536,6 +550,10 @@ func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) 
 	}
 	var optFns []func(*s3.Options)
 	ssl := strings.ToLower(uri.Scheme) == "https"
+	if isMRAP {
+		// MRAP endpoints require HTTPS regardless of the scheme specified in the URL
+		ssl = true
+	}
 	optFns = append(optFns, func(options *s3.Options) {
 		options.EndpointOptions.DisableHTTPS = !ssl
 		options.Region = region
@@ -558,8 +576,12 @@ func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) 
 	}
 
 	if ep != "" {
+		scheme := "https"
+		if !ssl {
+			scheme = "http"
+		}
 		optFns = append(optFns, func(options *s3.Options) {
-			options.BaseEndpoint = aws.String(uri.Scheme + "://" + ep)
+			options.BaseEndpoint = aws.String(scheme + "://" + ep)
 			options.UsePathStyle = defaultPathStyle()
 		})
 	}
