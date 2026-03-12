@@ -39,7 +39,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyauth "github.com/aws/smithy-go/auth"
 	smithymiddleware "github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/juicedata/juicefs/pkg/utils"
 	"github.com/pkg/errors"
 )
@@ -446,6 +448,26 @@ var oracleCompileRegexp = `.*\.compat.objectstorage\.(.*)\.oraclecloud\.com`
 var OVHCompileRegexp = `^s3\.(\w*)(\.\w*)?\.cloud\.ovh\.net$`
 var mrapCompileRegexp = regexp.MustCompile(`^(.+)\.mrap\.accesspoint\.s3-global\.amazonaws\.com$`)
 
+// mrapAuthSchemeResolver forces SigV4A signing with the wildcard region set ("*")
+// for MRAP endpoints. MRAP requires SigV4A because the signing region must be
+// valid for whichever AWS region the MRAP routes the request to.
+type mrapAuthSchemeResolver struct{}
+
+// ResolveAuthSchemes implements s3.AuthSchemeResolver. It returns a single SigV4A
+// option with the region wildcard "*", ensuring signatures are accepted regardless
+// of which AWS region the MRAP routes the request to.
+func (r *mrapAuthSchemeResolver) ResolveAuthSchemes(_ context.Context, _ *s3.AuthResolverParameters) ([]*smithyauth.Option, error) {
+	var props smithy.Properties
+	smithyhttp.SetSigV4ASigningName(&props, "s3")
+	smithyhttp.SetSigV4ASigningRegions(&props, []string{"*"})
+	return []*smithyauth.Option{
+		{
+			SchemeID:        smithyauth.SchemeIDSigV4A,
+			SignerProperties: props,
+		},
+	}, nil
+}
+
 func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) {
 	if !strings.Contains(endpoint, "://") {
 		if len(strings.Split(endpoint, ".")) > 1 && !strings.HasSuffix(endpoint, ".amazonaws.com") {
@@ -583,6 +605,13 @@ func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) 
 		optFns = append(optFns, func(options *s3.Options) {
 			options.BaseEndpoint = aws.String(scheme + "://" + ep)
 			options.UsePathStyle = defaultPathStyle()
+		})
+	}
+	if isMRAP {
+		// MRAP requires SigV4A with a wildcard region set ("*") so the signature
+		// is valid regardless of which AWS region the MRAP routes the request to.
+		optFns = append(optFns, func(options *s3.Options) {
+			options.AuthSchemeResolver = &mrapAuthSchemeResolver{}
 		})
 	}
 	var cfg aws.Config
