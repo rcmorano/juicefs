@@ -31,6 +31,11 @@ func Test_s3client_full_string(t *testing.T) {
 		{endpoint: "http://s3.compatible.site/bucket", want: "s3://s3.compatible.site/bucket/"},
 		{endpoint: "s3://s3.compatible.site/bucket", want: "s3://s3.compatible.site/bucket/"},
 		{endpoint: "https://mybucket.s3.us-east-2.amazonaws.com", want: "s3://mybucket/"},
+		// MRAP (Multi-Region Access Point) with bucket in path
+		{endpoint: "s3://mio7439qq7nzn.mrap.accesspoint.s3-global.amazonaws.com/MY_BUCKET", want: "s3://mio7439qq7nzn.mrap.accesspoint.s3-global.amazonaws.com/MY_BUCKET/"},
+		{endpoint: "https://mio7439qq7nzn.mrap.accesspoint.s3-global.amazonaws.com/MY_BUCKET", want: "s3://mio7439qq7nzn.mrap.accesspoint.s3-global.amazonaws.com/MY_BUCKET/"},
+		// MRAP without bucket in path (alias used as bucket)
+		{endpoint: "s3://mio7439qq7nzn.mrap.accesspoint.s3-global.amazonaws.com", want: "s3://mio7439qq7nzn.mrap.accesspoint.s3-global.amazonaws.com/mio7439qq7nzn/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.endpoint, func(t *testing.T) {
